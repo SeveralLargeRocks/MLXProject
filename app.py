@@ -1,64 +1,97 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, session
 import feedparser
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from sentence_transformers import SentenceTransformer
+from dateutil import parser
+import random
+import pytz
+import datetime
+from sklearn.decomposition import PCA
+import os
+import numpy as np
 
 app=Flask(__name__)
+app.secret_key = os.urandom(97)
+
+user_embeddings_store = {}
+
+model = SentenceTransformer('paraphrase-MiniLM-L12-v2')
 
 RSSFeeds = {
     'Nature_Geoscience': 'http://www.nature.com/ngeo/current_issue/rss',
-    'Nature': 'http://www.nature.com/nature/current_issue/rss'
+#    'Nature': 'http://www.nature.com/nature/current_issue/rss',
+    'GRL': 'https://agupubs.onlinelibrary.wiley.com/feed/19448007/most-recent',
+    'JGR': 'https://agupubs.onlinelibrary.wiley.com/feed/21699356/most-recent',
+    'Tectonics': 'https://agupubs.onlinelibrary.wiley.com/feed/19449194/most-recent',
 }
 
+def initialize_user_embedding():
+    return np.random.rand(384).tolist()
+
+def update_user_embedding(user_embedding, article_embedding):
+    return np.mean([user_embedding, article_embedding], axis=0).tolist()
+
+def calculate_similarity(user_embedding, article_embedding):
+    cos_sim = (np.dot(np.array(user_embedding), np.array(article_embedding)))/((np.linalg.norm(user_embedding))*(np.linalg.norm(article_embedding)))
+    return cos_sim
 
 def parse_date(entry):
-    """Extracts and normalizes the publication date from an RSS entry."""
-    
-    # 1. Check if `published_parsed` exists (preferred, already a struct_time object)
-    if hasattr(entry, 'published_parsed') and entry.published_parsed:
-        return time.strftime('%Y-%m-%d %H:%M:%S', entry.published_parsed)
-
-    # 2. Try `published` field (raw string, requires parsing)
-    if hasattr(entry, 'published') and entry.published:
+    if hasattr(entry, "published"):
         try:
-            return datetime.strptime(entry.published, '%a, %d %b %Y %H:%M:%S %Z').strftime('%Y-%m-%d %H:%M:%S')
+            dt = parser.parse(entry.published)
+            return dt.astimezone(pytz.utc)  # Convert to UTC to ensure consistency
         except ValueError:
-            pass  # Skip if format doesn't match
-
-    # 3. Try `dc:date` (ISO 8601 format)
-    if hasattr(entry, 'dc_date') and entry.dc_date:
-        try:
-            return datetime.strptime(entry.dc_date, '%Y-%m-%d').strftime('%Y-%m-%d %H:%M:%S')
-        except ValueError:
-            pass
-
-    # 4. Try `prism:publicationDate` (also ISO 8601)
-    if hasattr(entry, 'prism_publicationDate') and entry.prism_publicationDate:
-        try:
-            return datetime.strptime(entry.prism_publicationDate, '%Y-%m-%d').strftime('%Y-%m-%d %H:%M:%S')
-        except ValueError:
-            pass
-
-    # 5. If no date found, return None or a default value
-    return "1970-01-01 00:00:00"
+            pass  # Handle parsing errors gracefully
+    return datetime.datetime.min.replace(tzinfo=pytz.utc)
 
 @app.route('/')
 def index():
+    
+    one_month_ago = datetime.datetime.now(pytz.utc) - datetime.timedelta(days=30)
     articles = []
+    
+    if 'user_id' not in session:
+        session['user_id'] = str(uuid.uuid4())  # Generate unique ID
+        user_embeddings_store[session['user_id']] = initialize_user_embedding()
+        
+    user_id = session['user_id']
+    user_embedding = np.array(user_embeddings_store[user_id])
+    
     for source, feed in RSSFeeds.items():
         parsed_feed = feedparser.parse(feed)
         for entry in parsed_feed.entries:
-            date = parse_date(entry)  # Extract the date
-            articles.append((source, entry, date))
-        
-    articles = sorted(articles, key=lambda x: datetime.strptime(x[2], '%Y-%m-%d %H:%M:%S'), reverse=True)
-    page = request.args.get('page', 1, type=int)
-    per_page = 10
-    total_articles = len(articles)
-    start = (page-1) * per_page
-    end = start+per_page
-    paginated_articles = articles[start:end]
-    return render_template('index.html', articles=paginated_articles, page=page, total_pages=total_articles//(per_page+1))
+            date = parse_date(entry)
+            if date>= one_month_ago:
+                title = entry.title if hasattr(entry, 'title') else "No Title"
+                article_embedding = (model.encode(title)).tolist()
+                sim = calculate_similarity(user_embedding, article_embedding)
+                articles.append((source, entry, date, sim))
+    articles = sorted(articles, key=lambda x: x[2], reverse=True)
+    displayed = articles[:5]
+    
+    return render_template('index.html', articles=displayed)
+    
+@app.route('/article/<article_id>')
+def article(article_id):
+    # Fetch the article based on the ID (this is a simplified version)
+    article = None
+    for source, feed in RSSFeeds.items():
+        parsed_feed = feedparser.parse(feed)
+        for entry in parsed_feed.entries:
+            if article_id == entry.id:  # Match the article by ID
+                article = entry
+                break
+
+    if article:
+        article_embedding = (model.encode(article.title)).tolist()
+        current_user_embedding = np.array(session['user_embedding'])
+        new_user_embedding = update_user_embedding(current_user_embedding, article_embedding)
+        session['user_embedding'] = new_user_embedding
+    return render_template('article.html', article=article)
+
+    
+    
 
 @app.route('/search')
 def search():

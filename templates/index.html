@@ -10,12 +10,4 @@
             </article>
         {% endfor %}
     </div>
-    <div class="pagination">
-        {% if page > 1 %}
-            <a href="{{ url_for('index', page=page-1) }}">Previous</a>
-        {% endif %}
-        {% if page < total_pages %}
-            <a href="{{ url_for('index', page=page+1) }}">Next</a>
-        {% endif %}
-    </div>
 {% endblock %}
