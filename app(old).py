@@ -21,7 +21,7 @@ model = SentenceTransformer('paraphrase-MiniLM-L12-v2')
 
 RSSFeeds = {
     'Nature_Geoscience': 'http://www.nature.com/ngeo/current_issue/rss',
-#    'Nature': 'http://www.nature.com/nature/current_issue/rss',
+    'Nature': 'http://www.nature.com/nature/current_issue/rss',
     'GRL': 'https://agupubs.onlinelibrary.wiley.com/feed/19448007/most-recent',
     'JGR': 'https://agupubs.onlinelibrary.wiley.com/feed/21699356/most-recent',
     'Tectonics': 'https://agupubs.onlinelibrary.wiley.com/feed/19449194/most-recent',
@@ -46,23 +46,15 @@ def parse_date(entry):
             pass  # Handle parsing errors gracefully
     return datetime.datetime.min.replace(tzinfo=pytz.utc)
 
-
-
-daily_article = None
-last_updated = None
-
-def get_daily_article():
-    """ Selects one random article per day """
+def get_daily_article(RSSFeeds):
     global daily_article, last_updated
 
+    # Update only if it's a new day
     today = datetime.date.today()
-
-    # Return the same article if it's already selected for today
     if last_updated == today and daily_article:
         return daily_article
 
-    # Collect articles from all RSS feeds
-    articles = []
+    # Collect articles
     for feed_url in RSSFeeds.values():
         parsed_feed = feedparser.parse(feed_url)
         articles.extend(parsed_feed.entries)
@@ -75,43 +67,63 @@ def get_daily_article():
 
 @app.route('/')
 def index():
-    """ Homepage displaying only the daily selected article """
-    daily_article = get_daily_article()
     
-    if not daily_article:
-        return "<h2>No articles found for today.</h2>"  # Handle empty case
+    one_month_ago = datetime.datetime.now(pytz.utc) - datetime.timedelta(days=30)
+    articles = []
     
-    return render_template('index.html', article=daily_article)
-
+    if 'user_id' not in session:
+        session['user_id'] = str(uuid.uuid4())  # Generate unique ID
+        user_embeddings_store[session['user_id']] = initialize_user_embedding()
+        
+    user_id = session['user_id']
+    user_embedding = np.array(user_embeddings_store[user_id])
+    
+    for source, feed in RSSFeeds.items():
+        parsed_feed = feedparser.parse(feed)
+        for entry in parsed_feed.entries:
+            date = parse_date(entry)
+            if date>= one_month_ago:
+                title = entry.title if hasattr(entry, 'title') else "No Title"
+                article_embedding = (model.encode(title)).tolist()
+                sim = calculate_similarity(user_embedding, article_embedding)
+                articles.append((source, entry, date, sim))
+    articles = sorted(articles, key=lambda x: x[2], reverse=True)
+    displayed = articles[:5]
+    
+    return render_template('index.html', articles=displayed)
+    
 @app.route('/article/<article_id>')
 def article(article_id):
-    """ View an article & update user embedding """
-    article = get_daily_article()  # Ensure it matches the daily article
+    # Fetch the article based on the ID (this is a simplified version)
+    article = None
+    for source, feed in RSSFeeds.items():
+        parsed_feed = feedparser.parse(feed)
+        for entry in parsed_feed.entries:
+            if article_id == entry.id:  # Match the article by ID
+                article = entry
+                break
 
-    if article and article.id == article_id:
-        article_embedding = model.encode(article.title).tolist()
-        
-        user_id = session.get('user_id')
-        if user_id in user_embeddings_store:
-            current_user_embedding = np.array(user_embeddings_store[user_id])
-            new_user_embedding = update_user_embedding(current_user_embedding, article_embedding)
-            user_embeddings_store[user_id] = new_user_embedding
-
+    if article:
+        article_embedding = (model.encode(article.title)).tolist()
+        current_user_embedding = np.array(session['user_embedding'])
+        new_user_embedding = update_user_embedding(current_user_embedding, article_embedding)
+        session['user_embedding'] = new_user_embedding
     return render_template('article.html', article=article)
 
-@app.route('/search', methods=['GET'])
-def search():
-    query = request.args.get('q', '')  # Default to empty string if no query provided
     
-    articles = []
+    
+
+@app.route('/search')
+def search():
+    query = request.args.get('q')
+    
+    articles=[]
     for source, feed in RSSFeeds.items():
         parsed_feed = feedparser.parse(feed)
         entries = [(source, entry) for entry in parsed_feed.entries]
         articles.extend(entries)
         
-    # Ensure search is case insensitive
     results = [article for article in articles if query.lower() in article[1].title.lower()]
-
     return render_template('search_results.html', articles=results, query=query)
 
 if __name__ == '__main__':

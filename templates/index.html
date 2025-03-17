@@ -1,13 +1,15 @@
 {% extends 'base.html' %}
 
 {% block content %}
-    <div class="articles">
-        {% for article in articles %}
-            <article>
-                <h2><a href="{{ article[1].link }}">{{ article[1].title }}</a></h2>
-                <p>Published on: {{ article[2] }}</p>
-                <p>Source: {{ article[0] }}</p>
-            </article>
-        {% endfor %}
-    </div>
+    {% if article %}
+        <article>
+            <h2><a href="{{ article.link }}">{{ article.title }}</a></h2>
+            <p><strong>Published on:</strong> {{ article.published }}</p>
+            <p><strong>Source:</strong> {{ article.source if article.source else "Unknown" }}</p>
+            <p><strong>Abstract:</strong> {{ article.get('dc:description') }}</p>
+        </article>
+    {% else %}
+        <p>No article available for today.</p>
+    {% endif %}
 {% endblock %}
+
