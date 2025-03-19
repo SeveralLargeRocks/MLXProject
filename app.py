@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, session
+from TestingScraping import get_abstract_from_crossref
 import feedparser
 import time
 from datetime import datetime, timedelta
@@ -11,6 +12,8 @@ from sklearn.decomposition import PCA
 import os
 import numpy as np
 import uuid
+import re
+
 
 app=Flask(__name__)
 app.secret_key = os.urandom(97)
@@ -20,11 +23,11 @@ user_embeddings_store = {}
 model = SentenceTransformer('paraphrase-MiniLM-L12-v2')
 
 RSSFeeds = {
-    'Nature_Geoscience': 'http://www.nature.com/ngeo/current_issue/rss',
-#    'Nature': 'http://www.nature.com/nature/current_issue/rss',
-    'GRL': 'https://agupubs.onlinelibrary.wiley.com/feed/19448007/most-recent',
-    'JGR': 'https://agupubs.onlinelibrary.wiley.com/feed/21699356/most-recent',
-    'Tectonics': 'https://agupubs.onlinelibrary.wiley.com/feed/19449194/most-recent',
+    # 'GRL': 'https://agupubs.onlinelibrary.wiley.com/feed/19448007/most-recent', #dc:description
+    # 'JGR': 'https://agupubs.onlinelibrary.wiley.com/feed/21699356/most-recent', #dc:description
+    # 'Tectonics': 'https://agupubs.onlinelibrary.wiley.com/feed/19449194/most-recent', #dc:description
+    # 'GGG': 'https://agupubs.onlinelibrary.wiley.com/feed/15252027/most-recent', #dc:description
+    'Science': 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science',
 }
 
 def initialize_user_embedding():
@@ -47,6 +50,9 @@ def parse_date(entry):
     return datetime.datetime.min.replace(tzinfo=pytz.utc)
 
 
+def clean_abstract(abstract):
+    """ Remove JATS XML tags from the abstract. """
+    return (re.sub(r"<[^>]+>", "", abstract).strip())[8:]
 
 daily_article = None
 last_updated = None
@@ -70,6 +76,11 @@ def get_daily_article():
     # Pick a random article
     daily_article = random.choice(articles) if articles else None
     last_updated = today
+    
+    if daily_article:
+        doi = getattr(daily_article, "prism_doi", None)  # Extract DOI directly
+        daily_article.doi = doi
+        daily_article.abstract = clean_abstract(get_abstract_from_crossref(doi) if doi else "DOI not found.")
 
     return daily_article
 
@@ -90,12 +101,13 @@ def article(article_id):
 
     if article and article.id == article_id:
         article_embedding = model.encode(article.title).tolist()
-        
-        user_id = session.get('user_id')
-        if user_id in user_embeddings_store:
-            current_user_embedding = np.array(user_embeddings_store[user_id])
-            new_user_embedding = update_user_embedding(current_user_embedding, article_embedding)
-            user_embeddings_store[user_id] = new_user_embedding
+        if article and getattr(article, "id", "") == article_id:
+            article_embedding = model.encode(article.title).tolist()
+            user_id = session.get('user_id')
+            if user_id in user_embeddings_store:
+               current_user_embedding = np.array(user_embeddings_store[user_id])
+               new_user_embedding = update_user_embedding(current_user_embedding, article_embedding)/2
+               user_embeddings_store[user_id] = new_user_embedding
 
     return render_template('article.html', article=article)
 

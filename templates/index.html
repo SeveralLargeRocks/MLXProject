@@ -5,8 +5,14 @@
         <article>
             <h2><a href="{{ article.link }}">{{ article.title }}</a></h2>
             <p><strong>Published on:</strong> {{ article.published }}</p>
-            <p><strong>Source:</strong> {{ article.source if article.source else "Unknown" }}</p>
-            <p><strong>Abstract:</strong> {{ article.get('dc:description') }}</p>
+            {% if article.get('source') %}
+                <p>Source: <a href="{{ article.source.get('href', '#') }}" target="_blank">
+                   {{ article.source.get('title', 'Unknown Source') }}
+                </a></p>
+            {% else %}
+                <p>Source: {{ article.get('dc:source', 'Unknown Source') }}</p>
+            {% endif %}
+            <p><strong>Abstract:</strong> {{ article.abstract }} </p>
         </article>
     {% else %}
         <p>No article available for today.</p>
