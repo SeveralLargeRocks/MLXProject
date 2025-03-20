@@ -52,7 +52,7 @@ def parse_date(entry):
 
 def clean_abstract(abstract):
     """ Remove JATS XML tags from the abstract. """
-    return (re.sub(r"<[^>]+>", "", abstract).strip())[8:]
+    return (re.sub(r"<[^>]+>", "", abstract).strip())
 
 daily_article = None
 last_updated = None
